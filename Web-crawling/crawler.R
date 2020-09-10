@@ -1,11 +1,44 @@
-library(tidyverse)
-library(rvest)
-library(RSelenium)
-library(stringr)
-library(leaflet)
-library(ggmap)
-library(magrittr)
-library(sp)
+## --------------------------- General info ----------------------
+##
+## Script name: Shiny Foody
+##
+## Purpose of script: Crawl data from the web and create a shiny app for location selection
+##
+## Author: Hieu Tran
+##
+## Date Created: 2020-09-10
+##
+## Email: minhhieutran2112@gmail.com
+##
+## ---------------------------
+##
+## Notes:
+##   
+## ---------------------------
+
+## --------------------------- Preparation ------------------------
+rm(list = ls())
+options(java.parameters = "-Xmx4g")
+## load up and install the packages we will need:
+
+# create a vector of packages that you will be using
+packages <- c('tidyverse', 'rvest', 'RSelenium', 'stringr', 'leaflet', 'ggmap', 'magrittr', 'sp')
+
+# create a vector of installed packages
+installed_packages <- as.vector(installed.packages()[,c(1)])
+
+# install missing packages
+missing_packages <- setdiff(packages, installed_packages)
+
+if (length(missing_packages) > 0) {
+  install.packages(setdiff(packages, installed_packages))
+}
+
+# load packages
+invisible(lapply(packages, library, character.only = TRUE))
+
+## --------------------------- Fueling up ---------------------  
+
 rD <- rsDriver(browser = 'firefox')
 remDr <- rD$client
 
@@ -16,179 +49,194 @@ myswitch <- function (remDr, windowId) {
   remDr$queryRD(qpath, 'POST', qdata = list(handle = windowId))
 }
 
+get_html_text <- function(page_source, xpath, index=1) {
+  # get text by xpath
+  text <- (page_source %>% 
+             html_nodes(xpath = xpath) %>% 
+             html_text())[index]
+  
+  # if no text is extracted, return empty string, otherwise return that text
+  if (identical(text, character(0))) {
+    return('')
+  } else {
+    return(text)
+  }
+}
+
+get_general_info <- function(page_source) {
+  info <- tibble(
+    title = get_html_text(page_source, "//div[@class = 'main-info-title']//h1"),
+    category = get_html_text(page_source, "//div[@class = 'category-items']//a[@title]"),
+    cuisine_type = get_html_text(page_source, "//div[@class = 'cuisines-list']//a/text()"),
+    customer_type = get_html_text(page_source, "//div[@class = 'audiences']/text()"),
+    avg_score = get_html_text(page_source, "//div[@class = 'microsite-point-avg ']"),
+    location = get_html_text(page_source, "//div[@class = 'microsite-top-points']//span", 1),
+    price = get_html_text(page_source, "//div[@class = 'microsite-top-points']//span", 2),
+    quality = get_html_text(page_source, "//div[@class = 'microsite-top-points']//span", 3),
+    space = get_html_text(page_source, "//div[@class = 'microsite-top-points']//span", 4),
+    service = get_html_text(page_source, "//div[@class = 'microsite-top-points']//span", 5),
+    comment_count = get_html_text(page_source, "//div[@class = 'microsite-review-count']"),
+    address = get_html_text(page_source, "//div[@class = 'res-common-add']//span//a//span[@itemprop = 'streetAddress']"),
+    district = get_html_text(page_source, "//span[@itemprop = 'addressLocality']"),
+    price_range = get_html_text(page_source, "//span[@itemprop = 'priceRange']/span"),
+    time = get_html_text(page_source, "//div[@class = 'micro-timesopen']//span[3]"),
+    area = get_html_text(page_source, "//a[@itemprop = 'item']//span[@itemprop = 'name']")
+  )
+  
+  return(info)
+}
+
+## variable
 page_source <- list()
-true_cond <- list()
-false_cond <- list()
-ten_shop <- list()
-b <- list()
+multiple_branches <- list()
+single_branches <- list()
+shop_name <- list()
+click_field <- list()
 currWindow <- list()
 general_info <- list()
-menu <- list()
 windows <- list()
 otherWindow <- list()
-currWindow1 <- list()
+intermediate_handle <- list()
 windows1 <- list()
 otherWindow1 <- list()
 windows2 <- list()
 otherWindow2 <- list()
 general_info_2 <- list()
-menu_2 <- list()
-b2 <- list()
 a <- 1
 e <- 1
-d <- list()
+click_field_branches <- list()
+
 ##
-
-for (k in 1:84) {
-  remDr$navigate(paste0("https://www.foody.vn/ha-noi/cafe?ds=Restaurant&vt=row&st=1&c=2&page=", k, "&provinceId=218&categoryId=2&append=true"))
-  page_source[[k]] <- remDr$getPageSource() # 1 -> k
+for (page_num in 1:84) {
   
-  ## get name  ---------------------------------
-  ### get name of há» thá»ng ---------------------
-  (read_html(page_source[[k]][[1]]) %>% html_nodes(css = "h2") %>% html_text() %>% str_remove('^([[:space:]]+)') %>% str_remove('([[:space:]]+)$') %>% str_replace_all('[\n\r]','') -> ten_shop[[k]]) # 1 -> k
+  ## navigate to each pages
+  remDr$navigate(paste0("https://www.foody.vn/ha-noi/cafe?ds=Restaurant&vt=row&st=1&c=2&page=", page_num, "&provinceId=218&categoryId=2&append=true"))
   
-  which(str_detect(ten_shop[[k]], 'Há» thá»ng')) -> true_cond[[k]] # 1 -> k
-  which(str_detect(ten_shop[[k]], 'Há» thá»ng', negate = TRUE)) -> false_cond[[k]] # 1 -> k
+  ## get page's source_code (including all html code)
+  page_source[[page_num]] <- remDr$getPageSource()
   
-  remDr$findElements(using = "xpath", "//h2/a") -> b[[k]] # 1 -> k
+  ## get name of the restaurants
+  read_html(page_source[[page_num]][[1]]) %>% 
+    html_nodes(css = "h2") %>% 
+    html_text() %>% 
+    str_remove('^([[:space:]]+)') %>% # trim spaces at the beginning
+    str_remove('([[:space:]]+)$') %>% # trim spaces at the end
+    str_replace_all('[\n\r]','') -> shop_name[[page_num]] 
   
-  currWindow[[k]] <- remDr$getCurrentWindowHandle()[[1]] # 1 -> k
+  ## get index of multiple branches restaurants
+  which(str_detect(shop_name[[page_num]], 'Hệ thống')) -> multiple_branches[[page_num]]
   
-  for(i in true_cond[[k]]) { # 1 -> k
-## click link
-
-    remDr$executeScript("arguments[0].setAttribute('target', arguments[1]);", list(b[[k]][[i]], '_blank')) # 1 -> k, # 1 -> i
-    remDr$executeScript("arguments[0].setAttribute('rel', arguments[1]);", list(b[[k]][[i]], "noopener noreferrer")) # 1 -> k, # 1 -> i
-    remDr$executeScript("arguments[0].scrollIntoView(false);", list(b[[k]][[i]])) # 1 -> k, # 1 -> i
-    b[[k]][[i]]$clickElement() # 1 -> k, # 1 -> i
+  ## get index of single branches restaurants
+  which(str_detect(shop_name[[page_num]], 'Hệ thống', negate = TRUE)) -> single_branches[[page_num]]
+  
+  ## pick the element to click to get to the page of that specific restaurant
+  remDr$findElements(using = "xpath", "//h2/a") -> click_field[[page_num]] 
+  
+  ## get handle of the 'mother' page (which include many restaurants), use to get back to the mother page later
+  currWindow[[page_num]] <- remDr$getCurrentWindowHandle()[[1]] 
+  
+  ## ---------------- for restaurant with multiple branches ------------------
+  for(i in multiple_branches[[page_num]]) { 
     
+    ## click link
+    click_field[[page_num]][[i]]$clickElement()
+
     ## get handle
-    Sys.sleep(sample(seq(1,5), 1))
+    windows[[i]] <- remDr$getWindowHandles() # get all windows handle
+    otherWindow[[i]] <- windows[[i]][!windows[[i]] %in% currWindow[[page_num]]][[1]] # other handle apart from current 'mother' one
     
-    windows[[i]] <- remDr$getWindowHandles() # 1 -> i
-    otherWindow[[i]] <- windows[[i]][!windows[[i]] %in% currWindow[[k]]][[1]]
+    ## switch to other window
+    myswitch(remDr, otherWindow[[i]][[1]])  
     
-    ## switch window
-    myswitch(remDr, otherWindow[[i]][[1]])  # 1 -> i
+    ## ------ click to a branch then get information about that branch -----
     
-    ## process
+    ## get into a branch
+    remDr$findElements(using = "xpath", "//h2/a") -> click_field_branches[[i]] 
     
-    remDr$findElements(using = "xpath", "//h2/a") -> d[[i]] # 1 -> i
+    ## get the handle of the intermediate page (to get back later)
+    intermediate_handle[[i]] <- remDr$getCurrentWindowHandle()[[1]] 
     
-    currWindow1[[i]] <- remDr$getCurrentWindowHandle()[[1]] # 1 -> i
-  ## loop inside
-  for(j in 1:length(d[[i]])) {
-    remDr$executeScript("arguments[0].setAttribute('target', arguments[1]);", list(d[[i]][[j]], '_blank'))
-    remDr$executeScript("arguments[0].setAttribute('rel', arguments[1]);", list(d[[i]][[j]], "noopener noreferrer"))
-    remDr$executeScript("arguments[0].scrollIntoView(false);", list(d[[i]][[j]]))
-    d[[i]][[j]]$clickElement()
-    Sys.sleep(sample(seq(5,10), 1))
+    ## loop to get information about each branch
+    for(j in 1:length(click_field_branches[[i]])) {
+      
+      ## click link
+      click_field_branches[[i]][[j]]$clickElement()
+
+      ## get handle
+      windows1[[j]] <- remDr$getWindowHandles() # get all windows handle
+      otherWindow1[[j]] <- windows1[[j]][!windows1[[j]] %in% c(windows1[[j]][[1]], windows1[[j]][[2]])] # other handle apart from current 'mother' and 'intermediate' one
+      
+      ## switch to other window
+      myswitch(remDr, otherWindow1[[j]][[1]])
+      
+      ## extract info of that branch
+      page_source1 <- read_html((remDr$getPageSource())[[1]])
+      
+      general_info[[a]] <- get_general_info(page_source1)
+
+      ## close the tab for that branch and switch to the intermediate tab
+      remDr$closeWindow()
+      remDr$switchToWindow(intermediate_handle[[i]][[1]])
+
+      a <- a + 1
+      
+    }
     
-    windows1[[j]] <- remDr$getWindowHandles()
-    otherWindow1[[j]] <- windows1[[j]][!windows1[[j]] %in% c(windows1[[j]][[1]], windows1[[j]][[2]])]
-    myswitch(remDr, otherWindow1[[j]][[1]])
-    page_source1 <- read_html((remDr$getPageSource())[[1]])
-    Sys.sleep(sample(seq(5,10), 1))
-    
-    general_info[[a]] <- tibble(title = ifelse(identical(page_source1 %>% html_nodes(xpath = "//div[@class = 'main-info-title']//h1") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//div[@class = 'main-info-title']//h1") %>% html_text()),
-                                category = ifelse(identical(page_source1 %>% html_nodes(xpath = "//div[@class = 'category-items']//a[@title]") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//div[@class = 'category-items']//a[@title]") %>% html_text()),
-                                loai_mon = ifelse(identical(page_source1 %>% html_nodes(xpath = "//div[@class = 'cuisines-list']//a/text()") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//div[@class = 'cuisines-list']//a/text()") %>% html_text()),
-                                loai_khach = ifelse(identical(page_source1 %>% html_nodes(xpath = "//div[@class = 'audiences']/text()") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//div[@class = 'audiences']/text()") %>% html_text()),
-                                avg_score = ifelse(identical(page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-point-avg ']") %>% html_text(), character(0)), page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-point-avg avg-bg-low']") %>% html_text(), page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-point-avg ']") %>% html_text()),
-                                location = ifelse(identical((page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[1], character(0)), '', (page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[1]),
-                                price = ifelse(identical((page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[2], character(0)), '', (page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[2]),
-                                quality = ifelse(identical((page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[3], character(0)), '', (page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[3]),
-                                space = ifelse(identical((page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[4], character(0)), '', (page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[4]),
-                                service = ifelse(identical((page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[5], character(0)), '', (page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[5]),
-                                comment_count = ifelse(identical(page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-review-count']") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//div[@class = 'microsite-review-count']") %>% html_text()),
-                                address = ifelse(identical(page_source1 %>% html_nodes(xpath = "//div[@class = 'res-common-add']//span//a//span[@itemprop = 'streetAddress']") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//div[@class = 'res-common-add']//span//a//span[@itemprop = 'streetAddress']") %>% html_text()),
-                                district = ifelse(identical(page_source1 %>% html_nodes(xpath = "//span[@itemprop = 'addressLocality']") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//span[@itemprop = 'addressLocality']") %>% html_text()),
-                                price_range = ifelse(identical(page_source1 %>% html_nodes(xpath = "//span[@itemprop = 'priceRange']/span") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//span[@itemprop = 'priceRange']/span") %>% html_text()),
-                                time = ifelse(identical(page_source1 %>% html_nodes(xpath = "//div[@class = 'micro-timesopen']//span[3]") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//div[@class = 'micro-timesopen']//span[3]") %>% html_text()),
-                                khu_vuc = ifelse(identical((page_source1 %>% html_nodes(xpath = "//a[@itemprop = 'item']//span[@itemprop = 'name']") %>% html_text())[3], character(0)), '', (page_source1 %>% html_nodes(xpath = "//a[@itemprop = 'item']//span[@itemprop = 'name']") %>% html_text())[3]))
-    
-    menu[[a]] <- tibble(product = ifelse(identical(page_source1 %>% html_nodes(xpath = "//a[@class = 'title-name-food']//div[@class = 'title-name ng-binding ng-isolate-scope']") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//a[@class = 'title-name-food']//div[@class = 'title-name ng-binding ng-isolate-scope']") %>% html_text()),
-                        price = ifelse(identical(page_source1 %>% html_nodes(xpath = "//span[@class = 'price ng-binding']") %>% html_text(), character(0)), '', page_source1 %>% html_nodes(xpath = "//span[@class = 'price ng-binding']") %>% html_text())) # giÃ¡
-    
+    ## close intermediate tab and switch to mother page
     remDr$closeWindow()
-    remDr$switchToWindow(currWindow1[[i]][[1]])
-    Sys.sleep(sample(seq(4,6), 1))
-    
-    a <- a + 1
-  }
-    
-  remDr$closeWindow()
-  remDr$switchToWindow(currWindow[[k]])
-  Sys.sleep(sample(seq(4,6), 1))
+    remDr$switchToWindow(currWindow[[page_num]])
   }
   
-  for(g in false_cond[[k]]) {
-    remDr$executeScript("arguments[0].setAttribute('target', arguments[1]);", list(b[[k]][[g]], '_blank'))
-    remDr$executeScript("arguments[0].setAttribute('rel', arguments[1]);", list(b[[k]][[g]], "noopener noreferrer"))
-    remDr$executeScript("arguments[0].scrollIntoView(false);", list(b[[k]][[g]]))
-    b[[k]][[g]]$clickElement()
-    Sys.sleep(sample(seq(5,10), 1))
+  ## ---------------- for restaurant with single branches ------------------
+  
+  for(g in single_branches[[page_num]]) {
     
-    windows2[[g]] <- remDr$getWindowHandles() # 1 -> i
-    otherWindow2[[g]] <- windows2[[g]][!windows2[[g]] %in% currWindow[[k]]][[1]]
+    ## click link
+    click_field[[page_num]][[g]]$clickElement()
+
+    ## get handle
+    windows2[[g]] <- remDr$getWindowHandles() # get all windows handle
+    otherWindow2[[g]] <- windows2[[g]][!windows2[[g]] %in% currWindow[[page_num]]][[1]] # other handle apart from current 'mother' one
     
+    ## switch to other window
     myswitch(remDr, otherWindow2[[g]][[1]])
+    
+    ## extract info of that branch
     page_source2 <- read_html((remDr$getPageSource())[[1]])
-    Sys.sleep(sample(seq(5,10), 1))
-    
-    general_info_2[[e]] <- tibble(title = ifelse(identical(page_source2 %>% html_nodes(xpath = "//div[@class = 'main-info-title']//h1") %>% html_text(), character(0)), '', page_source2 %>% html_nodes(xpath = "//div[@class = 'main-info-title']//h1") %>% html_text()),
-                                  category = ifelse(identical(page_source2 %>% html_nodes(xpath = "//div[@class = 'category-items']//a[@title]") %>% html_text(), character(0)), '', page_source2 %>% html_nodes(xpath = "//div[@class = 'category-items']//a[@title]") %>% html_text()),
-                                  loai_mon = ifelse(identical(page_source2 %>% html_nodes(xpath = "//div[@class = 'cuisines-list']//a/text()") %>% html_text(), character(0)), '', page_source2 %>% html_nodes(xpath = "//div[@class = 'cuisines-list']//a/text()") %>% html_text()),
-                                  loai_khach = ifelse(identical(page_source2 %>% html_nodes(xpath = "//div[@class = 'audiences']/text()") %>% html_text(), character(0)), '', page_source2 %>% html_nodes(xpath = "//div[@class = 'audiences']/text()") %>% html_text()),
-                                  avg_score = ifelse(identical(page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-point-avg ']") %>% html_text(), character(0)), page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-point-avg avg-bg-low']") %>% html_text(), page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-point-avg ']") %>% html_text()),
-                                  location = ifelse(identical((page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[1], character(0)), '', (page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[1]),
-                                  price = ifelse(identical((page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[2], character(0)), '', (page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[2]),
-                                  quality = ifelse(identical((page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[3], character(0)), '', (page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[3]),
-                                  space = ifelse(identical((page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[4], character(0)), '', (page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[4]),
-                                  service = ifelse(identical((page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[5], character(0)), '', (page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-top-points']//span") %>% html_text())[5]),
-                                  comment_count = ifelse(identical(page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-review-count']") %>% html_text(), character(0)), '', page_source2 %>% html_nodes(xpath = "//div[@class = 'microsite-review-count']") %>% html_text()),
-                                  address = ifelse(identical(page_source2 %>% html_nodes(xpath = "//div[@class = 'res-common-add']//span//a//span[@itemprop = 'streetAddress']") %>% html_text(), character(0)), '', page_source2 %>% html_nodes(xpath = "//div[@class = 'res-common-add']//span//a//span[@itemprop = 'streetAddress']") %>% html_text()),
-                                  district = ifelse(identical(page_source2 %>% html_nodes(xpath = "//span[@itemprop = 'addressLocality']") %>% html_text(), character(0)), '', page_source2 %>% html_nodes(xpath = "//span[@itemprop = 'addressLocality']") %>% html_text()),
-                                  price_range = ifelse(identical(page_source2 %>% html_nodes(xpath = "//span[@itemprop = 'priceRange']/span") %>% html_text(), character(0)), '', page_source2 %>% html_nodes(xpath = "//span[@itemprop = 'priceRange']/span") %>% html_text()),
-                                  time = ifelse(identical(page_source2 %>% html_nodes(xpath = "//div[@class = 'micro-timesopen']//span[3]") %>% html_text(), character(0)), '', page_source2 %>% html_nodes(xpath = "//div[@class = 'micro-timesopen']//span[3]") %>% html_text()),
-                                  khu_vuc = ifelse(identical((page_source2 %>% html_nodes(xpath = "//a[@itemprop = 'item']//span[@itemprop = 'name']") %>% html_text())[3], character(0)), '', (page_source2 %>% html_nodes(xpath = "//a[@itemprop = 'item']//span[@itemprop = 'name']") %>% html_text())[3]))
-    
-    menu_2[[e]] <- tibble(product = page_source2 %>% html_nodes(xpath = "//a[@class = 'title-name-food']//div[@class = 'title-name ng-binding ng-isolate-scope']") %>% html_text(),
-                          price = page_source2 %>% html_nodes(xpath = "//span[@class = 'price ng-binding']") %>% html_text()) # giÃ¡
+
+    general_info_2[[e]] <- get_general_info(page_source2)
     
     e <- e + 1
     
+    ## close tab for that restaurant and switch to mother page
     remDr$closeWindow()
-    remDr$switchToWindow(currWindow[[k]])
-    Sys.sleep(sample(seq(4,6), 1))
+    remDr$switchToWindow(currWindow[[page_num]])
   }
 }
 
 ##################################
 
-do.call(rbind.data.frame, general_info) -> location_he_thong
-do.call(rbind.data.frame, general_info_2) -> location_1
-do.call(rbind.data.frame, menu) -> final_menu_he_thong
-do.call(rbind.data.frame, menu_2) -> final_menu
+do.call(rbind.data.frame, general_info) -> final_multiple_branches
+do.call(rbind.data.frame, general_info_2) -> final_single_branch
 
 ################################### process location
 loca_process <- function(location_x) {
-                  location_x %>%
-                    mutate_all(function(x) str_replace_all(x, '^((\\s+)(\"*)|(\"*))(.+)((\\s+)(\"*)|(\\s+))$', '\\5')) %>%
-                    mutate_all(function(x) str_replace_all(x, '^-\\s+', '')) %>%
-                    mutate_all(function(x) str_replace_all(x, '\\s+$|^\\s+', '')) %>%
-                    unite('address', address, district, sep = ', ') %>%
-                    separate(price_range, c('lower_price', 'upper_price'), sep = ' - ') %>%
-                    separate(time, c('time1', 'time2'), sep = ' \\| ') %>%
-                    separate(time1, c('open_1', 'close_1'), sep = ' - ') %>%
-                    separate(time2, c('open_2', 'close_2'), sep = ' _ ') %>%
-                    mutate_at(vars('lower_price', 'upper_price'), function(x) str_replace_all(x, '\\.|Ä|d', '')) %>%
-                    mutate_at(vars('lower_price', 'upper_price'), function(x) str_sub(x, end = -2)) %>%
-                    mutate_at(vars('avg_score', 'location', 'quality', 'space', 'service', 'comment_count', 'lower_price', 'upper_price'), as.double)
+  location_x %>%
+    mutate_all(function(x) str_replace_all(x, '^((\\s+)(\"*)|(\"*))(.+)((\\s+)(\"*)|(\\s+))$', '\\5')) %>%
+    mutate_all(function(x) str_replace_all(x, '^-\\s+', '')) %>%
+    mutate_all(function(x) str_replace_all(x, '\\s+$|^\\s+', '')) %>%
+    unite('address', address, district, sep = ', ') %>%
+    separate(price_range, c('lower_price', 'upper_price'), sep = ' - ') %>%
+    separate(time, c('time1', 'time2'), sep = ' \\| ') %>%
+    separate(time1, c('open_1', 'close_1'), sep = ' - ') %>%
+    separate(time2, c('open_2', 'close_2'), sep = ' _ ') %>%
+    mutate_at(vars('lower_price', 'upper_price'), function(x) str_replace_all(x, '\\.|Ä|click_field_branches', '')) %>%
+    mutate_at(vars('lower_price', 'upper_price'), function(x) str_sub(x, end = -2)) %>%
+    mutate_at(vars('avg_score', 'location', 'quality', 'space', 'service', 'comment_count', 'lower_price', 'upper_price'), as.double)
 }
 
-loca_process(location_1) -> location_1
-loca_process(location_he_thong) -> location_he_thong
+loca_process(final_single_branch) -> final_single_branch
+loca_process(final_multiple_branches) -> final_multiple_branches
 
 #################### maps
 # function
@@ -238,18 +286,18 @@ if (file.exists(tempfilename)){
   print(startindex)
 }
 
-paste0(location_1$address, ', HÃ  Ná»i, Viá»t Nam') -> address_1
+paste0(final_single_branch$address, ', HÃ  Ná»i, Viá»t Nam') -> address_1
 
 for (ii in seq(startindex, length(address_1))){
   tryCatch({print(paste("Working on index", ii, "of", length(address_1)))
-  #query the google geocoder - this will pause here if we are over the limit.
-  result = getGeoDetails(address_1[ii]) 
-  print(result$status)     
-  result$index <- ii
-  #append the answer to the results file.
-  geocoded_1 <- rbind(geocoded_1, result)
-  #save temporary results as we are going along
-  saveRDS(geocoded_1, tempfilename)
+    #query the google geocoder - this will pause here if we are over the limit.
+    result = getGeoDetails(address_1[ii]) 
+    print(result$status)     
+    result$index <- ii
+    #append the answer to the results file.
+    geocoded_1 <- rbind(geocoded_1, result)
+    #save temporary results as we are going along
+    saveRDS(geocoded_1, tempfilename)
   }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
 }
 
@@ -265,35 +313,35 @@ if (file.exists(tempfilename1)){
   print(startindex1)
 }
 
-paste0(location_he_thong$address, ', HÃ  Ná»i, Viá»t Nam') -> address_he_thong
+paste0(final_multiple_branches$address, ', HÃ  Ná»i, Viá»t Nam') -> address_he_thong
 
 for (iq in seq(startindex1, length(address_he_thong))){
   tryCatch({print(paste("Working on index", iq, "of", length(address_he_thong)))
-  #query the google geocoder - this will pause here if we are over the limit.
-  result1 = getGeoDetails(address_he_thong[iq]) 
-  print(result1$status)     
-  result1$index <- iq
-  #append the answer to the results file.
-  geocoded_he_thong <- rbind(geocoded_he_thong, result1)
-  #save temporary results as we are going along
-  saveRDS(geocoded_he_thong, tempfilename1)
+    #query the google geocoder - this will pause here if we are over the limit.
+    result1 = getGeoDetails(address_he_thong[iq]) 
+    print(result1$status)     
+    result1$index <- iq
+    #append the answer to the results file.
+    geocoded_he_thong <- rbind(geocoded_he_thong, result1)
+    #save temporary results as we are going along
+    saveRDS(geocoded_he_thong, tempfilename1)
   }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
 }
 
 ## left join
-location_1 %>%
+final_single_branch %>%
   rowid_to_column() %>%
   left_join(geocoded_1, by = c('rowid' = 'index')) %>%
-  select(-row_id, -original_address, -status, -address_type) -> location_1
+  select(-row_id, -original_address, -status, -address_type) -> final_single_branch
 
-location_he_thong %>%
+final_multiple_branches %>%
   rowid_to_column() %>%
   left_join(geocoded_he_thong, by = c('rowid' = 'index')) %>%
-  select(-row_id, -original_address, -status, -address_type) -> location_he_thong
+  select(-row_id, -original_address, -status, -address_type) -> final_multiple_branches
 
 ## post process
-location_1 %<>% 
+final_single_branch %<>% 
   mutate_all(function(x) str_replace_all(x, ',$', ''))
 
-location_he_thong %<>% 
+final_multiple_branches %<>% 
   mutate_all(function(x) str_replace_all(x, ',$', ''))
