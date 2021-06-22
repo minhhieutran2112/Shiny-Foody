@@ -1,0 +1,1 @@
+"C:\Users\minhh\AppData\Local\Programs\Python\Python37\python.exe" "C:\Users\minhh\OneDrive - University of Sussex\Personal project\google_job_search\scripts\get_job.py"
